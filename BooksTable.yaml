@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  Books:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: asin
+          AttributeType: S
+      KeySchema:
+        - AttributeName: asin
+          KeyType: HASH
+
+  BooksLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Runtime: nodejs16.x
+      Handler: index.handler
+      Role: !GetAtt BooksLambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          tableName: !Ref Books
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const response = require('cfn-response');
+          const client = new AWS.DynamoDB();
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          
+          exports.handler = async (event, context) => {
+            try {
+              const tableName = process.env.tableName
+              console.log(tableName)
+              var params = {
+                'TableName': tableName
+              };
+          
+              client.waitFor('tableExists', params, function(err, data) {
+                if (err) console.log(err, err.stack); // an error occurred
+                else     console.log(data);           // successful response
+              });
+
+              const itemsToAdd = [
+                { asin: 'B00EGMV00W', author: 'Baldwin', title: 'The Fire Next Time', year_published: 1963 },
+                { asin: 'B0831PKRVL', author: 'Fitzgerald', title: 'The Great Gatsby', year_published: 1925 },
+                { asin: 'B004UJTG6Q', author: 'Twain', title: 'The Adventures of Tom Sawyer', year_published: 1876 },
+                { asin: 'B07YL3R5FQ', author: 'Hemingway', title: 'The Old Man and the Sea', year_published: 1952 },
+                { asin: 'B00K0OI42W', author: 'Lee', title: 'To Kill a Mockingbird', year_published: 1960 }
+              ];
+          
+              const putItemPromises = itemsToAdd.map((item) => {
+                const params = {
+                  TableName: tableName,
+                  Item: item,
+                };
+                return dynamodb.put(params).promise();
+              });
+          
+              await Promise.all(putItemPromises).then(res=>console.log(res)).catch(err=>console.log(err))
+          
+              const responseData = { Result: 'Items added successfully' };
+              await response.send(event, context, response.SUCCESS, responseData);
+            } catch (error) {
+              console.log(error)
+              const responseData = { Error: 'Something went wrong' };
+              await response.send(event, context, response.FAILED, responseData);
+            }
+          };
+      Timeout: 30
+  BooksLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+  BooksResource:
+    Type: 'Custom::BooksResource'
+    Properties:
+      ServiceToken: !GetAtt BooksLambdaFunction.Arn
